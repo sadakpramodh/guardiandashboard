@@ -1,0 +1,32 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Streamlit cache and logs
+.streamlit/
+
+# Environment files
+.env
+.env.*
+
+# Firebase credentials
+firebase-adminsdk*.json
+serviceAccountKey.json
+mshomeguardian*.json
+
+# IDE settings
+.vscode/
+.idea/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Pyenv or virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
