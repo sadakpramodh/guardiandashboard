@@ -1,0 +1,140 @@
+# main.py – Entry point for Streamlit dashboard
+
+import streamlit as st
+from auth import login
+from firebase_admin import credentials, firestore, initialize_app
+import os
+from dotenv import load_dotenv
+from pages.device_overview import show_device_overview  
+from pages.call_logs import show_call_logs
+from pages.contacts import show_contacts
+from pages.messages import show_messages
+from pages.locations import show_locations
+from pages.phone_state import show_phone_state
+from pages.weather import show_weather
+
+# Load environment variables
+load_dotenv()
+
+# Configure Streamlit page
+st.set_page_config(
+    page_title="Guardian Dashboard",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Hide Streamlit's default navigation
+hide_streamlit_style = """
+<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+.stDeployButton {display:none;}
+div[data-testid="stToolbar"] {visibility: hidden;}
+div[data-testid="stDecoration"] {visibility: hidden;}
+div[data-testid="stStatusWidget"] {visibility: hidden;}
+#MainMenu {visibility: hidden;}
+div[data-testid="stSidebar"] > div:first-child {padding-top: 1rem;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
+# Initialize Firebase Admin SDK (only once)
+@st.cache_resource
+def init_firebase():
+    """Initialize Firebase Admin SDK with caching to avoid reinitialization"""
+    try:
+        cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        
+        if not cred_path:
+            st.error("⚠️ GOOGLE_APPLICATION_CREDENTIALS not set in .env file")
+            st.stop()
+            
+        if not os.path.exists(cred_path):
+            st.error(f"⚠️ Firebase credentials file not found at: {cred_path}")
+            st.info("Make sure the file path in .env matches your actual JSON file location")
+            st.stop()
+
+        # Initialize Firebase Admin SDK
+        cred = credentials.Certificate(cred_path)
+        initialize_app(cred)
+        
+        return firestore.client()
+        
+    except Exception as e:
+        st.error(f"❌ Firebase initialization failed: {str(e)}")
+        st.info("Check your Firebase credentials and ensure the service account has proper permissions")
+        st.stop()
+
+# Initialize Firebase
+db = init_firebase()
+
+def main():
+    """Main application logic"""
+    
+    # Custom CSS for better styling
+    st.markdown("""
+    <style>
+    .main-header {
+        text-align: center;
+        padding: 1rem 0;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 10px;
+        margin-bottom: 2rem;
+    }
+    .sidebar .sidebar-content {
+        background-color: #f0f2f6;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # App header
+    st.markdown('<div class="main-header"><h1>🛡️ Guardian Dashboard</h1><p>Real-time Device Monitoring & Analytics</p></div>', unsafe_allow_html=True)
+
+    # Authentication check
+    if not login():
+        st.info("👆 Please log in to access the dashboard")
+        return
+
+    # Sidebar navigation
+    st.sidebar.title("📊 Navigation")
+    st.sidebar.markdown("---")
+    
+    # Page selection
+    pages = {
+        "📱 Device Overview": show_device_overview,
+        "📞 Call Logs": show_call_logs,
+        "👥 Contacts": show_contacts,
+        "💬 Messages": show_messages,
+        "🌍 Location Tracker": show_locations,
+        "📶 Phone State": show_phone_state,
+        "🌦️ Weather Data": show_weather
+    }
+    
+    selected_page = st.sidebar.selectbox(
+        "Choose a section:",
+        list(pages.keys()),
+        index=0
+    )
+    
+    # User info in sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.info(f"🔐 Logged in as:\n{st.session_state.email}")
+    
+    if st.sidebar.button("🚪 Logout"):
+        # Clear session state
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+
+    # Display selected page
+    try:
+        pages[selected_page](db)
+    except Exception as e:
+        st.error(f"❌ Error loading {selected_page}: {str(e)}")
+        st.info("This might be due to missing data or network issues. Please try refreshing the page.")
+
+if __name__ == "__main__":
+    main()
