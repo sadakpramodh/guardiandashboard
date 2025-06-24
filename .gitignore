@@ -2,32 +2,229 @@
 __pycache__/
 *.py[cod]
 *.pyo
+*.pyd
+.Python
 
 # Streamlit cache and logs
 .streamlit/
+*.log
 
-# Environment files
+# Environment files (CRITICAL - Never commit these!)
 .env
 .env.*
-
-# Firebase credentials
-firebase-adminsdk*.json
-serviceAccountKey.json
-mshomeguardian*.json
-google-services.json
-
-# IDE settings
-.vscode/
-.idea/
-
-# OS-generated files
-.DS_Store
-Thumbs.db
-
-# Pyenv or virtual environments
+.environment
 .venv/
 venv/
 env/
 
+# Firebase credentials (CRITICAL - Never commit these!)
+firebase-adminsdk*.json
+serviceAccountKey.json
+mshomeguardian*.json
+google-services.json
+firebase-config.json
+*.pem
+*.key
+
+# Python files
+quick_fix.py
+fix_datetime.py
+main.py.bak
+pages.bak/
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS-generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.env/
+
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Spyder
+.spyderproject
+.spyproject
+
+# Rope
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Log files
+*.log
+logs/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Configuration files with secrets
+config.ini
+config.yaml
+config.json
+settings.ini
+secrets.yaml
+secrets.json
+
+# SSH keys
+id_rsa
+id_rsa.pub
+*.pem
+
+# SSL certificates
+*.crt
+*.cert
+*.cer
+*.p12
+*.pfx
+
+# Application specific
+uploads/
+downloads/
+cache/
+.cache/
+
+# Docker
+Dockerfile.local
+docker-compose.override.yml
+.dockerignore
+
+# Local development
+local_settings.py
+.local
+*.local
+
+# macOS
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# JetBrains IDEs
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Atom
+.atom/
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+Session.vim
+Sessionx.vim
+.netrwhist
+*~
+tags
+[._]*.un~

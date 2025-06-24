@@ -6,3 +6,5 @@ pydeck>=0.8.0
 numpy>=1.24.0
 google-cloud-firestore>=2.11.0
 pyrebase4>=4.6.0
+plotly>=5.17.0
+requests>=2.31.0
