@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Fixed Complete File Creator for Guardian Dashboard
 Creates all lib files with proper UTF-8 encoding for Windows
@@ -369,6 +370,7 @@ def create_simple_main():
 import streamlit as st
 import os
 from dotenv import load_dotenv
+import auth
 
 # Load environment first
 load_dotenv()
@@ -412,35 +414,14 @@ def simple_login():
         return True
     
     # Header
-    st.markdown('''
-    <div class="main-header">
+    st.markdown("""
+    <div class=\"main-header\">
         <h1>🛡️ Guardian Dashboard</h1>
         <p>Enterprise Device Monitoring & Analytics Platform</p>
     </div>
-    ''', unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
     
-    st.subheader("🔐 Login Required")
-    st.info("👆 Please log in to access the dashboard")
-    
-    with st.form("login_form"):
-        email = st.text_input("📧 Email Address", placeholder="your-email@example.com")
-        password = st.text_input("🔑 Password", type="password", placeholder="Your password")
-        
-        login_clicked = st.form_submit_button("🔓 Login", use_container_width=True)
-        
-        if login_clicked:
-            # Simple validation - replace with your auth logic
-            super_admin = os.getenv("SUPER_ADMIN_EMAIL", "sadakpramodh@yahoo.com")
-            if email and email.lower() == super_admin.lower():
-                st.session_state.authenticated = True
-                st.session_state.email = email
-                st.success("✅ Login successful!")
-                st.balloons()
-                st.rerun()
-            else:
-                st.error("❌ Invalid credentials. Please contact administrator.")
-    
-    return False
+    return auth.login()
 
 def show_authenticated_app():
     """Show the main app after authentication"""
