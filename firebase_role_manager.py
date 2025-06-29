@@ -1,4 +1,4 @@
-# firebase_role_manager.py - Fixed Firebase-based Role & User Management
+# firebase_role_manager.py - Clean Firebase-based Role & User Management
 
 import streamlit as st
 from datetime import datetime, timedelta
@@ -71,56 +71,10 @@ class FirebaseRoleManager:
                 # Initialize system settings
                 self.initialize_system_settings()
                 
-                # Create Jyothsna user with special permissions (based on your .env)
-                self.create_jyothsna_user()
-                
                 return True
             return False
         except Exception as e:
             st.error(f"Error initializing system: {str(e)}")
-            return False
-    
-    def create_jyothsna_user(self):
-        """Create Jyothsna user with special permissions from .env"""
-        try:
-            jyothsna_email = os.getenv("JYOTHSNA_EMAIL", "jyothsnaroyal944@gmail.com")
-            admin_email = os.getenv("SUPER_ADMIN_EMAIL", "sadakpramodh@yahoo.com")
-            
-            jyothsna_data = {
-                "email": jyothsna_email,
-                "sanitized_email": self.sanitize_email(jyothsna_email),
-                "role": "user",
-                "permissions": {
-                    "device_overview": True,
-                    "locations": True,
-                    "weather": True,
-                    "call_logs": False,
-                    "contacts": False,
-                    "messages": False,
-                    "phone_state": False
-                },
-                "can_see_users": [jyothsna_email, admin_email],  # Can see herself and admin
-                "can_manage_users": False,
-                "can_see_features": [],
-                "is_active": True,
-                "created_at": datetime.now(),
-                "created_by": "system_initialization",
-                "last_login": None,
-                "login_count": 0,
-                "notification_settings": {
-                    "email_on_login": False,
-                    "email_on_failed_login": False,
-                    "email_on_permission_change": True
-                },
-                "special_note": "Can see admin's location data as per configuration"
-            }
-            
-            sanitized_jyothsna = self.sanitize_email(jyothsna_email)
-            self.db.collection(self.user_mgmt_collection).document(sanitized_jyothsna).set(jyothsna_data)
-            
-            return True
-        except Exception as e:
-            print(f"Error creating Jyothsna user: {str(e)}")
             return False
     
     def initialize_system_settings(self):
