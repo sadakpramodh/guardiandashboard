@@ -376,7 +376,13 @@ def show_call_logs(role_manager, selected_user, selected_device):
 
     try:
         user_email = role_manager.sanitize_email(selected_user)
-        logs_ref = role_manager.db.collection("users").document(user_email).collection("devices").document(selected_device).collection("call_logs")
+        logs_ref = (
+            role_manager.db.collection("users")
+            .document(user_email)
+            .collection("devices")
+            .document(selected_device)
+            .collection("call_logs")
+        )
         logs = logs_ref.limit(1000).stream()
 
         call_data = []
@@ -400,41 +406,54 @@ def show_call_logs(role_manager, selected_user, selected_device):
         with col1:
             st.metric("📞 Total Calls", len(df))
         with col2:
-            incoming_count = len(df[df['type'] == 1])
+            incoming_count = len(df[df["type"] == 1])
             st.metric("📞 Incoming", incoming_count)
         with col3:
-            outgoing_count = len(df[df['type'] == 2])
+            outgoing_count = len(df[df["type"] == 2])
             st.metric("📤 Outgoing", outgoing_count)
         with col4:
-            missed_count = len(df[df['type'] == 3])
+            missed_count = len(df[df["type"] == 3])
             st.metric("📵 Missed", missed_count)
 
-        # Display enhanced call logs table
-        st.markdown("### 📋 Call History")
-        
-        display_df = df[["timestamp", "phoneNumber", "type_name", "duration_formatted"]].copy()
-        display_df.columns = ["Time", "Phone Number", "Type", "Duration"]
-        display_df["Time"] = display_df["Time"].dt.strftime("%Y-%m-%d %H:%M:%S")
-        
-        st.dataframe(display_df, use_container_width=True)
+        # Conversation-style view
+        st.markdown("### 💬 Call Conversation")
+        if "phoneNumber" in df.columns:
+            contacts = df["phoneNumber"].dropna().unique()
+            selected_contact = st.selectbox("Select Contact", contacts)
+            conv_df = df[df["phoneNumber"] == selected_contact].sort_values("timestamp")
+
+            for _, row in conv_df.iterrows():
+                direction = "user" if row["type"] == 2 else "assistant"
+                with st.chat_message(direction):
+                    st.write(
+                        f"{row['type_name']} call"
+                        + (f" ({row['duration_formatted']})" if row['duration'] else "")
+                    )
+                    st.caption(row["timestamp"].strftime("%Y-%m-%d %H:%M:%S"))
+        else:
+            st.info("Phone number information not available.")
 
         # Call analytics
         with st.expander("📊 Call Analytics"):
             col1, col2 = st.columns(2)
-            
+
             with col1:
-                type_counts = df['type_name'].value_counts()
-                fig_pie = px.pie(values=type_counts.values, names=type_counts.index, 
-                               title="Call Type Distribution")
+                type_counts = df["type_name"].value_counts()
+                fig_pie = px.pie(
+                    values=type_counts.values,
+                    names=type_counts.index,
+                    title="Call Type Distribution",
+                )
                 st.plotly_chart(fig_pie, use_container_width=True)
-            
+
             with col2:
                 df_daily = df.copy()
-                df_daily['date'] = df_daily['timestamp'].dt.date
-                daily_counts = df_daily.groupby('date').size().reset_index(name='count')
-                
-                fig_line = px.line(daily_counts, x='date', y='count', 
-                                 title="Daily Call Activity")
+                df_daily["date"] = df_daily["timestamp"].dt.date
+                daily_counts = df_daily.groupby("date").size().reset_index(name="count")
+
+                fig_line = px.line(
+                    daily_counts, x="date", y="count", title="Daily Call Activity"
+                )
                 st.plotly_chart(fig_line, use_container_width=True)
 
     except Exception as e:
@@ -510,7 +529,13 @@ def show_messages(role_manager, selected_user, selected_device):
 
     try:
         user_email = role_manager.sanitize_email(selected_user)
-        messages_ref = role_manager.db.collection("users").document(user_email).collection("devices").document(selected_device).collection("messages")
+        messages_ref = (
+            role_manager.db.collection("users")
+            .document(user_email)
+            .collection("devices")
+            .document(selected_device)
+            .collection("messages")
+        )
         messages = messages_ref.limit(1000).stream()
 
         sms_list = []
@@ -532,56 +557,56 @@ def show_messages(role_manager, selected_user, selected_device):
         with col1:
             st.metric("💬 Total Messages", len(df))
         with col2:
-            received_count = len(df[df['type'] == 1])
+            received_count = len(df[df["type"] == 1])
             st.metric("📥 Received", received_count)
         with col3:
-            sent_count = len(df[df['type'] == 2])
+            sent_count = len(df[df["type"] == 2])
             st.metric("📤 Sent", sent_count)
         with col4:
             if "phoneNumber" in df.columns:
                 unique_contacts = df["phoneNumber"].nunique()
                 st.metric("👥 Unique Contacts", unique_contacts)
 
-        # Search functionality
-        search = st.text_input("🔍 Search message content or sender")
-        if search:
-            df = df[df.apply(lambda row: search.lower() in str(row.get("body", "")).lower()
-                                            or search.lower() in str(row.get("phoneNumber", "")).lower(), axis=1)]
+        # Conversation-style view
+        st.markdown("### 💬 Conversations")
+        if "phoneNumber" in df.columns:
+            contacts = df["phoneNumber"].dropna().unique()
+            selected_contact = st.selectbox("Select Contact", contacts)
+            conv_df = df[df["phoneNumber"] == selected_contact].sort_values("timestamp")
 
-        # Display enhanced messages table
-        st.markdown("### 📱 Message History")
-        
-        display_columns = ["timestamp", "phoneNumber", "type_name", "body"]
-        available_columns = [col for col in display_columns if col in df.columns]
-        
-        if available_columns:
-            display_df = df[available_columns].copy()
-            display_df.columns = ["Time", "Phone Number", "Type", "Message"]
-            display_df["Time"] = display_df["Time"].dt.strftime("%Y-%m-%d %H:%M:%S")
-            # Truncate long messages
-            if "Message" in display_df.columns:
-                display_df["Message"] = display_df["Message"].astype(str).apply(
-                    lambda x: x[:50] + "..." if len(x) > 50 else x
-                )
-            st.dataframe(display_df, use_container_width=True)
+            for _, row in conv_df.iterrows():
+                direction = "user" if row["type"] == 2 else "assistant"
+                with st.chat_message(direction):
+                    st.write(row.get("body", ""))
+                    st.caption(row["timestamp"].strftime("%Y-%m-%d %H:%M:%S"))
+        else:
+            for _, row in df.sort_values("timestamp").iterrows():
+                direction = "user" if row["type"] == 2 else "assistant"
+                with st.chat_message(direction):
+                    st.write(row.get("body", ""))
+                    st.caption(row["timestamp"].strftime("%Y-%m-%d %H:%M:%S"))
 
         # Message analytics
         with st.expander("📊 Message Analytics"):
             col1, col2 = st.columns(2)
-            
+
             with col1:
-                type_counts = df['type_name'].value_counts()
-                fig_pie = px.pie(values=type_counts.values, names=type_counts.index,
-                               title="Message Type Distribution")
+                type_counts = df["type_name"].value_counts()
+                fig_pie = px.pie(
+                    values=type_counts.values,
+                    names=type_counts.index,
+                    title="Message Type Distribution",
+                )
                 st.plotly_chart(fig_pie, use_container_width=True)
-            
+
             with col2:
                 df_daily = df.copy()
-                df_daily['date'] = df_daily['timestamp'].dt.date
-                daily_counts = df_daily.groupby('date').size().reset_index(name='count')
-                
-                fig_line = px.line(daily_counts, x='date', y='count',
-                                 title="Daily Message Activity")
+                df_daily["date"] = df_daily["timestamp"].dt.date
+                daily_counts = df_daily.groupby("date").size().reset_index(name="count")
+
+                fig_line = px.line(
+                    daily_counts, x="date", y="count", title="Daily Message Activity"
+                )
                 st.plotly_chart(fig_line, use_container_width=True)
 
     except Exception as e:
@@ -897,13 +922,15 @@ def main():
     location_info = get_user_location_info()
     user_agent = "Streamlit App"  # Since we can't easily get user agent in Streamlit
     
-    # Log user login with notification
-    role_manager.log_user_login(
-        current_user_email, 
-        location_info["ip"], 
-        user_agent, 
-        location_info["location"]
-    )
+    # Log user login with notification only once per session
+    if not st.session_state.get("login_logged"):
+        role_manager.log_user_login(
+            current_user_email,
+            location_info["ip"],
+            user_agent,
+            location_info["location"]
+        )
+        st.session_state["login_logged"] = True
 
     # Check if user exists in system
     user_profile = role_manager.get_user_profile(current_user_email)
