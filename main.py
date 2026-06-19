@@ -6,12 +6,13 @@ from firebase_admin import credentials, firestore, initialize_app
 import os
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import plotly.express as px
 import plotly.graph_objects as go
 from dotenv import load_dotenv
 import json
 import requests
+from zoneinfo import ZoneInfo
 from firebase_role_manager import FirebaseRoleManager
 from admin_management import show_admin_dashboard
 
@@ -113,6 +114,147 @@ def get_message_type_name(msg_type):
     }
     return message_types.get(msg_type, f"❓ Unknown ({msg_type})")
 
+def parse_epoch_timestamp(raw_value):
+    """Parse seconds/ms/us/ns epoch values into UTC datetime."""
+    if raw_value is None:
+        return None, None
+
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return None, None
+
+    if value <= 0:
+        return None, None
+
+    abs_value = abs(value)
+    unit = "s"
+
+    if abs_value >= 1e18:
+        seconds = value / 1e9
+        unit = "ns"
+    elif abs_value >= 1e15:
+        seconds = value / 1e6
+        unit = "us"
+    elif abs_value >= 1e12:
+        seconds = value / 1e3
+        unit = "ms"
+    else:
+        seconds = value
+
+    try:
+        return datetime.fromtimestamp(seconds, tz=timezone.utc), unit
+    except (OverflowError, OSError, ValueError):
+        return None, None
+
+def format_timestamp_for_display(raw_value, timezone_name=None):
+    """Format epoch values to human readable local time, handling ns/us/ms/s."""
+    dt_utc, unit = parse_epoch_timestamp(raw_value)
+    if not dt_utc:
+        return "Unknown"
+
+    dt_local = dt_utc
+    tz_label = "UTC"
+
+    if timezone_name:
+        try:
+            dt_local = dt_utc.astimezone(ZoneInfo(timezone_name))
+            tz_label = timezone_name
+        except Exception:
+            tz_label = "UTC"
+
+    return f"{dt_local.strftime('%Y-%m-%d %H:%M:%S')} ({tz_label}, source: {unit})"
+
+def epoch_to_datetime(raw_value):
+    """Convert epoch values to naive datetime for DataFrame operations."""
+    dt_utc, _ = parse_epoch_timestamp(raw_value)
+    if not dt_utc:
+        return None
+    return dt_utc.replace(tzinfo=None)
+
+def normalize_operator_name(operator_value):
+    """Normalize operator names for better matching and logo mapping."""
+    if not operator_value:
+        return ""
+
+    value = str(operator_value).strip().lower()
+    if not value:
+        return ""
+
+    if "bsnl" in value:
+        return "BSNL"
+    if "airtel" in value or "bharti" in value:
+        return "Airtel"
+    if "jio" in value:
+        return "Jio"
+    if "vodafone" in value or value == "vi" or "idea" in value:
+        return "Vi"
+    if "mtnl" in value:
+        return "MTNL"
+
+    return str(operator_value).strip()
+
+def get_operator_logo_url(operator_name):
+    """Return online logo URL for known operators."""
+    logo_map = {
+        "BSNL": "https://logo.clearbit.com/bsnl.co.in",
+        "Airtel": "https://logo.clearbit.com/airtel.in",
+        "Jio": "https://logo.clearbit.com/jio.com",
+        "Vi": "https://logo.clearbit.com/myvi.in",
+        "MTNL": "https://logo.clearbit.com/mtnl.net.in"
+    }
+    return logo_map.get(operator_name)
+
+def resolve_operator_info(device):
+    """Resolve network and SIM operator details from names/codes."""
+    mcc_mnc_map = {
+        "40445": "Airtel",
+        "40449": "Airtel",
+        "40410": "Airtel",
+        "40486": "Vi",
+        "40484": "Vi",
+        "40466": "Jio",
+        "405840": "Jio",
+        "40434": "BSNL",
+        "40438": "BSNL",
+        "40451": "BSNL",
+        "40457": "BSNL",
+        "40472": "BSNL",
+        "40471": "BSNL",
+        "40496": "MTNL"
+    }
+
+    network_name_raw = (device.get("networkOperatorName") or "").strip()
+    sim_name_raw = (device.get("simOperatorName") or "").strip()
+    network_code = str(device.get("networkOperator") or "").strip()
+    sim_code = str(device.get("simOperator") or "").strip()
+
+    network_name = normalize_operator_name(network_name_raw)
+    sim_name = normalize_operator_name(sim_name_raw)
+
+    if not network_name and network_code in mcc_mnc_map:
+        network_name = mcc_mnc_map[network_code]
+    if not sim_name and sim_code in mcc_mnc_map:
+        sim_name = mcc_mnc_map[sim_code]
+
+    if not network_name:
+        network_name = f"Unknown ({network_code})" if network_code else "Unknown"
+    if not sim_name:
+        sim_name = f"Unknown ({sim_code})" if sim_code else "Unknown"
+
+    return {
+        "network": {
+            "name": network_name,
+            "code": network_code or "Unknown",
+            "logo": get_operator_logo_url(network_name)
+        },
+        "sim": {
+            "name": sim_name,
+            "code": sim_code or "Unknown",
+            "logo": get_operator_logo_url(sim_name)
+        }
+    }
+
 def get_user_location_info():
     """Get user's location information"""
     try:
@@ -209,6 +351,8 @@ def show_device_overview(role_manager, selected_user, selected_device):
         device = device_doc.to_dict()
 
         st.markdown("### 📊 Device Information")
+        operator_info = resolve_operator_info(device)
+        device_timezone = device.get("timezone")
         
         col1, col2, col3 = st.columns(3)
         
@@ -220,15 +364,47 @@ def show_device_overview(role_manager, selected_user, selected_device):
         with col2:
             st.metric("🔧 Hardware", device.get('hardware', 'Unknown'))
             st.metric("🏗️ Build ID", device.get('buildId', 'Unknown')[:10] + "..." if device.get('buildId') else 'Unknown')
-            st.metric("📡 Network Operator", device.get('networkOperatorName', 'Unknown'))
+            st.metric("📡 Network Operator", operator_info["network"]["name"])
             
         with col3:
             st.metric("📞 Device ID", device.get('deviceId', 'Unknown')[:10] + "..." if device.get('deviceId') else 'Unknown')
             st.metric("📶 IMEI Status", device.get('imei', 'Unknown'))
             st.metric("🔋 Active Status", "✅ Active" if device.get('isActive', False) else "❌ Inactive")
 
+        st.markdown("### 📶 SIM & Network Details")
+        op_col1, op_col2 = st.columns(2)
+
+        with op_col1:
+            st.markdown("**Network Operator**")
+            if operator_info["network"]["logo"]:
+                st.image(operator_info["network"]["logo"], width=96)
+            st.write(f"Name: {operator_info['network']['name']}")
+            st.write(f"Code (MCC+MNC): {operator_info['network']['code']}")
+
+        with op_col2:
+            st.markdown("**SIM Operator**")
+            if operator_info["sim"]["logo"]:
+                st.image(operator_info["sim"]["logo"], width=96)
+            st.write(f"Name: {operator_info['sim']['name']}")
+            st.write(f"Code (MCC+MNC): {operator_info['sim']['code']}")
+
+        st.markdown("### 🕒 Registration & Activity Timeline")
+        time_col1, time_col2 = st.columns(2)
+        with time_col1:
+            st.write(f"First Registered: {format_timestamp_for_display(device.get('firstRegistered'), device_timezone)}")
+            st.write(f"Registered At: {format_timestamp_for_display(device.get('registeredAt'), device_timezone)}")
+            st.write(f"Uploaded At: {format_timestamp_for_display(device.get('uploadedAt'), device_timezone)}")
+        with time_col2:
+            st.write(f"Last Active: {format_timestamp_for_display(device.get('lastActive'), device_timezone)}")
+            st.write(f"Last Updated: {format_timestamp_for_display(device.get('lastUpdated'), device_timezone)}")
+            st.write(f"Timezone: {device_timezone or 'Unknown'}")
+
         with st.expander("🔍 Detailed Device Information"):
-            st.json(device)
+            readable_device = dict(device)
+            for key in ["firstRegistered", "registeredAt", "uploadedAt", "lastActive", "lastUpdated"]:
+                if key in readable_device:
+                    readable_device[f"{key}_readable"] = format_timestamp_for_display(readable_device.get(key), device_timezone)
+            st.json(readable_device)
 
     except Exception as e:
         st.error(f"❌ Error loading device overview: {str(e)}")
@@ -275,7 +451,9 @@ def show_locations(role_manager, selected_user, selected_device):
         for loc in locs:
             entry = loc.to_dict()
             if "latitude" in entry and "longitude" in entry:
-                entry["timestamp"] = datetime.fromtimestamp(entry.get("timestamp", 0) / 1000.0)
+                entry["timestamp"] = epoch_to_datetime(entry.get("timestamp"))
+                if not entry["timestamp"]:
+                    continue
                 location_data.append(entry)
 
         if not location_data:
@@ -388,7 +566,9 @@ def show_call_logs(role_manager, selected_user, selected_device):
         call_data = []
         for log in logs:
             entry = log.to_dict()
-            entry["timestamp"] = datetime.fromtimestamp(entry.get("timestamp", 0) / 1000.0)
+            entry["timestamp"] = epoch_to_datetime(entry.get("timestamp"))
+            if not entry["timestamp"]:
+                continue
             entry["duration"] = entry.get("duration", 0)
             entry["type_name"] = get_call_type_name(entry.get("type", 0))
             entry["duration_formatted"] = format_duration(entry.get("duration", 0))
@@ -401,30 +581,140 @@ def show_call_logs(role_manager, selected_user, selected_device):
         df = pd.DataFrame(call_data)
         df = df.sort_values("timestamp", ascending=False)
 
+        # Date-wise and detail filters
+        df["date"] = df["timestamp"].dt.date
+        min_date = df["date"].min()
+        max_date = df["date"].max()
+
+        # Initialize date range state for quick presets
+        if "call_logs_start_date" not in st.session_state:
+            st.session_state.call_logs_start_date = min_date
+        if "call_logs_end_date" not in st.session_state:
+            st.session_state.call_logs_end_date = max_date
+
+        st.markdown("### ⚡ Quick Date Presets")
+        preset_col1, preset_col2, preset_col3 = st.columns(3)
+
+        with preset_col1:
+            if st.button("Today", key="call_logs_preset_today", use_container_width=True):
+                today = max_date
+                st.session_state.call_logs_start_date = today
+                st.session_state.call_logs_end_date = today
+
+        with preset_col2:
+            if st.button("Last 7 Days", key="call_logs_preset_last_7", use_container_width=True):
+                end_day = max_date
+                start_day = end_day - timedelta(days=6)
+                if start_day < min_date:
+                    start_day = min_date
+                st.session_state.call_logs_start_date = start_day
+                st.session_state.call_logs_end_date = end_day
+
+        with preset_col3:
+            if st.button("This Month", key="call_logs_preset_this_month", use_container_width=True):
+                end_day = max_date
+                month_start = end_day.replace(day=1)
+                if month_start < min_date:
+                    month_start = min_date
+                st.session_state.call_logs_start_date = month_start
+                st.session_state.call_logs_end_date = end_day
+
+        st.markdown("### 🗓️ Filters")
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+
+        with filter_col1:
+            start_date = st.date_input(
+                "From Date",
+                value=st.session_state.call_logs_start_date,
+                min_value=min_date,
+                max_value=max_date,
+                key="call_logs_start_date"
+            )
+
+        with filter_col2:
+            end_date = st.date_input(
+                "To Date",
+                value=st.session_state.call_logs_end_date,
+                min_value=min_date,
+                max_value=max_date,
+                key="call_logs_end_date"
+            )
+
+        with filter_col3:
+            available_types = ["All"] + sorted(df["type_name"].dropna().unique().tolist())
+            selected_type = st.selectbox(
+                "Call Type",
+                available_types,
+                key="call_logs_type_filter"
+            )
+
+        with filter_col4:
+            search_phone = st.text_input(
+                "Search Number/Name",
+                placeholder="e.g. +91..., John",
+                key="call_logs_search"
+            )
+
+        if start_date > end_date:
+            st.warning("Start date is after end date. Swapping automatically.")
+            start_date, end_date = end_date, start_date
+
+        filtered_df = df[(df["date"] >= start_date) & (df["date"] <= end_date)].copy()
+
+        if selected_type != "All":
+            filtered_df = filtered_df[filtered_df["type_name"] == selected_type]
+
+        if search_phone:
+            search_term = search_phone.strip().lower()
+            filtered_df = filtered_df[
+                filtered_df.apply(
+                    lambda row: search_term in str(row.get("phoneNumber", "")).lower()
+                    or search_term in str(row.get("contactName", "")).lower(),
+                    axis=1,
+                )
+            ]
+
+        if filtered_df.empty:
+            st.info("No call logs match the selected filters.")
+            return
+
         # Enhanced statistics
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("📞 Total Calls", len(df))
+            st.metric("📞 Total Calls", len(filtered_df))
         with col2:
-            incoming_count = len(df[df["type"] == 1])
+            incoming_count = len(filtered_df[filtered_df["type"] == 1])
             st.metric("📞 Incoming", incoming_count)
         with col3:
-            outgoing_count = len(df[df["type"] == 2])
+            outgoing_count = len(filtered_df[filtered_df["type"] == 2])
             st.metric("📤 Outgoing", outgoing_count)
         with col4:
-            missed_count = len(df[df["type"] == 3])
+            missed_count = len(filtered_df[filtered_df["type"] == 3])
             st.metric("📵 Missed", missed_count)
+
+        summary_col1, summary_col2, summary_col3 = st.columns(3)
+        with summary_col1:
+            st.metric("📅 Date Range", f"{start_date} to {end_date}")
+        with summary_col2:
+            total_duration = int(filtered_df["duration"].fillna(0).sum())
+            st.metric("⏱️ Total Duration", format_duration(total_duration))
+        with summary_col3:
+            unique_contacts = filtered_df["phoneNumber"].nunique() if "phoneNumber" in filtered_df.columns else 0
+            st.metric("👥 Unique Numbers", unique_contacts)
 
         # Conversation-style view
         st.markdown("### 💬 Call Conversation")
-        if "phoneNumber" in df.columns:
-            contacts = df["phoneNumber"].dropna().unique()
+        if "phoneNumber" in filtered_df.columns:
+            contacts = filtered_df["phoneNumber"].dropna().unique()
             selected_contact = st.selectbox("Select Contact", contacts)
-            conv_df = df[df["phoneNumber"] == selected_contact].sort_values("timestamp")
+            conv_df = filtered_df[filtered_df["phoneNumber"] == selected_contact].sort_values("timestamp")
 
             for _, row in conv_df.iterrows():
                 direction = "user" if row["type"] == 2 else "assistant"
                 with st.chat_message(direction):
+                    contact_name = row.get("contactName")
+                    if contact_name:
+                        st.write(f"Contact: {contact_name}")
                     st.write(
                         f"{row['type_name']} call"
                         + (f" ({row['duration_formatted']})" if row['duration'] else "")
@@ -438,7 +728,7 @@ def show_call_logs(role_manager, selected_user, selected_device):
             col1, col2 = st.columns(2)
 
             with col1:
-                type_counts = df["type_name"].value_counts()
+                type_counts = filtered_df["type_name"].value_counts()
                 fig_pie = px.pie(
                     values=type_counts.values,
                     names=type_counts.index,
@@ -447,7 +737,7 @@ def show_call_logs(role_manager, selected_user, selected_device):
                 st.plotly_chart(fig_pie, use_container_width=True)
 
             with col2:
-                df_daily = df.copy()
+                df_daily = filtered_df.copy()
                 df_daily["date"] = df_daily["timestamp"].dt.date
                 daily_counts = df_daily.groupby("date").size().reset_index(name="count")
 
@@ -455,6 +745,50 @@ def show_call_logs(role_manager, selected_user, selected_device):
                     daily_counts, x="date", y="count", title="Daily Call Activity"
                 )
                 st.plotly_chart(fig_line, use_container_width=True)
+
+        # Detailed records and export section
+        st.markdown("### 📋 Detailed Call Records")
+        display_columns = [
+            "timestamp",
+            "type_name",
+            "duration_formatted",
+            "duration",
+            "phoneNumber",
+            "contactName",
+            "isRead",
+            "isNew",
+            "uploadedAt",
+            "syncTimestamp"
+        ]
+        available_columns = [col for col in display_columns if col in filtered_df.columns]
+
+        detail_df = filtered_df[available_columns].copy()
+        if "timestamp" in detail_df.columns:
+            detail_df["timestamp"] = detail_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        st.dataframe(detail_df, use_container_width=True)
+
+        export_col1, export_col2 = st.columns(2)
+        csv_data = detail_df.to_csv(index=False).encode("utf-8")
+        json_data = detail_df.to_json(orient="records", indent=2)
+
+        with export_col1:
+            st.download_button(
+                label="⬇️ Export Filtered Call Logs (CSV)",
+                data=csv_data,
+                file_name=f"call_logs_{selected_user}_{start_date}_{end_date}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+        with export_col2:
+            st.download_button(
+                label="⬇️ Export Filtered Call Logs (JSON)",
+                data=json_data,
+                file_name=f"call_logs_{selected_user}_{start_date}_{end_date}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
 
     except Exception as e:
         st.error(f"❌ Error loading call logs: {str(e)}")
@@ -478,7 +812,7 @@ def show_contacts(role_manager, selected_user, selected_device):
         contact_list = []
         for contact in contacts:
             entry = contact.to_dict()
-            entry["timestamp"] = datetime.fromtimestamp(entry.get("timestamp", 0) / 1000.0) if entry.get("timestamp") else datetime.now()
+            entry["timestamp"] = epoch_to_datetime(entry.get("timestamp")) if entry.get("timestamp") else datetime.now()
             contact_list.append(entry)
 
         if not contact_list:
@@ -541,7 +875,9 @@ def show_messages(role_manager, selected_user, selected_device):
         sms_list = []
         for msg in messages:
             entry = msg.to_dict()
-            entry["timestamp"] = datetime.fromtimestamp(entry.get("timestamp", 0) / 1000.0)
+            entry["timestamp"] = epoch_to_datetime(entry.get("timestamp"))
+            if not entry["timestamp"]:
+                continue
             entry["type_name"] = get_message_type_name(entry.get("type", 0))
             sms_list.append(entry)
 
@@ -552,35 +888,145 @@ def show_messages(role_manager, selected_user, selected_device):
         df = pd.DataFrame(sms_list)
         df = df.sort_values("timestamp", ascending=False)
 
+        # Date-wise and detail filters
+        df["date"] = df["timestamp"].dt.date
+        min_date = df["date"].min()
+        max_date = df["date"].max()
+
+        if "messages_start_date" not in st.session_state:
+            st.session_state.messages_start_date = min_date
+        if "messages_end_date" not in st.session_state:
+            st.session_state.messages_end_date = max_date
+
+        st.markdown("### ⚡ Quick Date Presets")
+        preset_col1, preset_col2, preset_col3 = st.columns(3)
+
+        with preset_col1:
+            if st.button("Today", key="messages_preset_today", use_container_width=True):
+                today = max_date
+                st.session_state.messages_start_date = today
+                st.session_state.messages_end_date = today
+
+        with preset_col2:
+            if st.button("Last 7 Days", key="messages_preset_last_7", use_container_width=True):
+                end_day = max_date
+                start_day = end_day - timedelta(days=6)
+                if start_day < min_date:
+                    start_day = min_date
+                st.session_state.messages_start_date = start_day
+                st.session_state.messages_end_date = end_day
+
+        with preset_col3:
+            if st.button("This Month", key="messages_preset_this_month", use_container_width=True):
+                end_day = max_date
+                month_start = end_day.replace(day=1)
+                if month_start < min_date:
+                    month_start = min_date
+                st.session_state.messages_start_date = month_start
+                st.session_state.messages_end_date = end_day
+
+        st.markdown("### 🗓️ Filters")
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+
+        with filter_col1:
+            start_date = st.date_input(
+                "From Date",
+                value=st.session_state.messages_start_date,
+                min_value=min_date,
+                max_value=max_date,
+                key="messages_start_date"
+            )
+
+        with filter_col2:
+            end_date = st.date_input(
+                "To Date",
+                value=st.session_state.messages_end_date,
+                min_value=min_date,
+                max_value=max_date,
+                key="messages_end_date"
+            )
+
+        with filter_col3:
+            available_types = ["All"] + sorted(df["type_name"].dropna().unique().tolist())
+            selected_type = st.selectbox(
+                "Message Type",
+                available_types,
+                key="messages_type_filter"
+            )
+
+        with filter_col4:
+            search_message = st.text_input(
+                "Search Number/Name/Body",
+                placeholder="e.g. +91..., John, OTP",
+                key="messages_search"
+            )
+
+        if start_date > end_date:
+            st.warning("Start date is after end date. Swapping automatically.")
+            start_date, end_date = end_date, start_date
+
+        filtered_df = df[(df["date"] >= start_date) & (df["date"] <= end_date)].copy()
+
+        if selected_type != "All":
+            filtered_df = filtered_df[filtered_df["type_name"] == selected_type]
+
+        if search_message:
+            search_term = search_message.strip().lower()
+            filtered_df = filtered_df[
+                filtered_df.apply(
+                    lambda row: search_term in str(row.get("phoneNumber", "")).lower()
+                    or search_term in str(row.get("contactName", "")).lower()
+                    or search_term in str(row.get("body", "")).lower(),
+                    axis=1,
+                )
+            ]
+
+        if filtered_df.empty:
+            st.info("No messages match the selected filters.")
+            return
+
         # Enhanced message statistics
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("💬 Total Messages", len(df))
+            st.metric("💬 Total Messages", len(filtered_df))
         with col2:
-            received_count = len(df[df["type"] == 1])
+            received_count = len(filtered_df[filtered_df["type"] == 1])
             st.metric("📥 Received", received_count)
         with col3:
-            sent_count = len(df[df["type"] == 2])
+            sent_count = len(filtered_df[filtered_df["type"] == 2])
             st.metric("📤 Sent", sent_count)
         with col4:
-            if "phoneNumber" in df.columns:
-                unique_contacts = df["phoneNumber"].nunique()
+            if "phoneNumber" in filtered_df.columns:
+                unique_contacts = filtered_df["phoneNumber"].nunique()
                 st.metric("👥 Unique Contacts", unique_contacts)
+
+        summary_col1, summary_col2, summary_col3 = st.columns(3)
+        with summary_col1:
+            st.metric("📅 Date Range", f"{start_date} to {end_date}")
+        with summary_col2:
+            body_characters = int(filtered_df["body"].fillna("").astype(str).str.len().sum()) if "body" in filtered_df.columns else 0
+            st.metric("🔤 Total Characters", body_characters)
+        with summary_col3:
+            unique_numbers = filtered_df["phoneNumber"].nunique() if "phoneNumber" in filtered_df.columns else 0
+            st.metric("📱 Unique Numbers", unique_numbers)
 
         # Conversation-style view
         st.markdown("### 💬 Conversations")
-        if "phoneNumber" in df.columns:
-            contacts = df["phoneNumber"].dropna().unique()
+        if "phoneNumber" in filtered_df.columns:
+            contacts = filtered_df["phoneNumber"].dropna().unique()
             selected_contact = st.selectbox("Select Contact", contacts)
-            conv_df = df[df["phoneNumber"] == selected_contact].sort_values("timestamp")
+            conv_df = filtered_df[filtered_df["phoneNumber"] == selected_contact].sort_values("timestamp")
 
             for _, row in conv_df.iterrows():
                 direction = "user" if row["type"] == 2 else "assistant"
                 with st.chat_message(direction):
+                    contact_name = row.get("contactName")
+                    if contact_name:
+                        st.write(f"Contact: {contact_name}")
                     st.write(row.get("body", ""))
                     st.caption(row["timestamp"].strftime("%Y-%m-%d %H:%M:%S"))
         else:
-            for _, row in df.sort_values("timestamp").iterrows():
+            for _, row in filtered_df.sort_values("timestamp").iterrows():
                 direction = "user" if row["type"] == 2 else "assistant"
                 with st.chat_message(direction):
                     st.write(row.get("body", ""))
@@ -591,7 +1037,7 @@ def show_messages(role_manager, selected_user, selected_device):
             col1, col2 = st.columns(2)
 
             with col1:
-                type_counts = df["type_name"].value_counts()
+                type_counts = filtered_df["type_name"].value_counts()
                 fig_pie = px.pie(
                     values=type_counts.values,
                     names=type_counts.index,
@@ -600,7 +1046,7 @@ def show_messages(role_manager, selected_user, selected_device):
                 st.plotly_chart(fig_pie, use_container_width=True)
 
             with col2:
-                df_daily = df.copy()
+                df_daily = filtered_df.copy()
                 df_daily["date"] = df_daily["timestamp"].dt.date
                 daily_counts = df_daily.groupby("date").size().reset_index(name="count")
 
@@ -608,6 +1054,51 @@ def show_messages(role_manager, selected_user, selected_device):
                     daily_counts, x="date", y="count", title="Daily Message Activity"
                 )
                 st.plotly_chart(fig_line, use_container_width=True)
+
+        # Detailed records and export section
+        st.markdown("### 📋 Detailed Message Records")
+        display_columns = [
+            "timestamp",
+            "type_name",
+            "phoneNumber",
+            "contactName",
+            "body",
+            "subject",
+            "deliveryStatus",
+            "isRead",
+            "seen",
+            "uploadedAt",
+            "syncTimestamp"
+        ]
+        available_columns = [col for col in display_columns if col in filtered_df.columns]
+
+        detail_df = filtered_df[available_columns].copy()
+        if "timestamp" in detail_df.columns:
+            detail_df["timestamp"] = detail_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        st.dataframe(detail_df, use_container_width=True)
+
+        export_col1, export_col2 = st.columns(2)
+        csv_data = detail_df.to_csv(index=False).encode("utf-8")
+        json_data = detail_df.to_json(orient="records", indent=2)
+
+        with export_col1:
+            st.download_button(
+                label="⬇️ Export Filtered Messages (CSV)",
+                data=csv_data,
+                file_name=f"messages_{selected_user}_{start_date}_{end_date}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+        with export_col2:
+            st.download_button(
+                label="⬇️ Export Filtered Messages (JSON)",
+                data=json_data,
+                file_name=f"messages_{selected_user}_{start_date}_{end_date}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
 
     except Exception as e:
         st.error(f"❌ Error loading messages: {str(e)}")
@@ -636,7 +1127,9 @@ def show_phone_state(role_manager, selected_user, selected_device):
                 
                 for rec in records:
                     entry = rec.to_dict()
-                    entry["timestamp"] = datetime.fromtimestamp(entry.get("timestamp", 0) / 1000.0)
+                    entry["timestamp"] = epoch_to_datetime(entry.get("timestamp"))
+                    if not entry["timestamp"]:
+                        continue
                     entry["collection"] = collection_name
                     state_data.append(entry)
                     
@@ -744,7 +1237,9 @@ def show_weather(role_manager, selected_user, selected_device):
         weather_data = []
         for rec in records:
             entry = rec.to_dict()
-            entry["timestamp"] = datetime.fromtimestamp(entry.get("timestamp", 0) / 1000.0)
+            entry["timestamp"] = epoch_to_datetime(entry.get("timestamp"))
+            if not entry["timestamp"]:
+                continue
             weather_data.append(entry)
 
         if not weather_data:
