@@ -92,6 +92,10 @@ def format_duration(seconds):
 
 def get_call_type_name(call_type):
     """Convert call type number to readable name"""
+    try:
+        call_type = int(call_type)
+    except (TypeError, ValueError):
+        pass
     call_types = {
         1: "📞 Incoming",
         2: "📤 Outgoing", 
@@ -104,6 +108,10 @@ def get_call_type_name(call_type):
 
 def get_message_type_name(msg_type):
     """Convert message type number to readable name"""
+    try:
+        msg_type = int(msg_type)
+    except (TypeError, ValueError):
+        pass
     message_types = {
         1: "📥 Received",
         2: "📤 Sent",
@@ -277,6 +285,10 @@ def get_user_location_info():
         "country": "Unknown",
         "location": "Unknown"
     }
+
+def has_feature_access(role_manager, user_email, feature):
+    """Allow new feature permissions while remaining backward compatible with phone_state."""
+    return role_manager.can_access_feature(user_email, feature) or role_manager.can_access_feature(user_email, "phone_state")
 
 def show_user_device_selector(role_manager, current_user_email):
     """Show user and device selector based on Firebase permissions"""
@@ -561,7 +573,7 @@ def show_call_logs(role_manager, selected_user, selected_device):
             .document(selected_device)
             .collection("call_logs")
         )
-        logs = logs_ref.limit(1000).stream()
+        logs = logs_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1000).stream()
 
         call_data = []
         for log in logs:
@@ -580,11 +592,20 @@ def show_call_logs(role_manager, selected_user, selected_device):
 
         df = pd.DataFrame(call_data)
         df = df.sort_values("timestamp", ascending=False)
+        df["type_numeric"] = pd.to_numeric(df["type"], errors="coerce").fillna(-1).astype(int)
+        df["duration"] = pd.to_numeric(df["duration"], errors="coerce").fillna(0)
 
         # Date-wise and detail filters
         df["date"] = df["timestamp"].dt.date
         min_date = df["date"].min()
         max_date = df["date"].max()
+
+        # Reset date filters when user/device context changes to avoid stale ranges
+        call_logs_scope = f"{selected_user}:{selected_device}"
+        if st.session_state.get("call_logs_scope") != call_logs_scope:
+            st.session_state.call_logs_scope = call_logs_scope
+            st.session_state.call_logs_start_date = max_date
+            st.session_state.call_logs_end_date = max_date
 
         # Initialize date range state for quick presets
         if "call_logs_start_date" not in st.session_state:
@@ -683,14 +704,15 @@ def show_call_logs(role_manager, selected_user, selected_device):
         with col1:
             st.metric("📞 Total Calls", len(filtered_df))
         with col2:
-            incoming_count = len(filtered_df[filtered_df["type"] == 1])
+            incoming_count = len(filtered_df[filtered_df["type_numeric"] == 1])
             st.metric("📞 Incoming", incoming_count)
         with col3:
-            outgoing_count = len(filtered_df[filtered_df["type"] == 2])
+            outgoing_count = len(filtered_df[filtered_df["type_numeric"] == 2])
             st.metric("📤 Outgoing", outgoing_count)
         with col4:
-            missed_count = len(filtered_df[filtered_df["type"] == 3])
-            st.metric("📵 Missed", missed_count)
+            missed_count = len(filtered_df[filtered_df["type_numeric"] == 3])
+            other_count = len(filtered_df) - incoming_count - outgoing_count - missed_count
+            st.metric("🧩 Other Types", other_count)
 
         summary_col1, summary_col2, summary_col3 = st.columns(3)
         with summary_col1:
@@ -710,7 +732,7 @@ def show_call_logs(role_manager, selected_user, selected_device):
             conv_df = filtered_df[filtered_df["phoneNumber"] == selected_contact].sort_values("timestamp")
 
             for _, row in conv_df.iterrows():
-                direction = "user" if row["type"] == 2 else "assistant"
+                direction = "user" if row["type_numeric"] == 2 else "assistant"
                 with st.chat_message(direction):
                     contact_name = row.get("contactName")
                     if contact_name:
@@ -870,7 +892,7 @@ def show_messages(role_manager, selected_user, selected_device):
             .document(selected_device)
             .collection("messages")
         )
-        messages = messages_ref.limit(1000).stream()
+        messages = messages_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1000).stream()
 
         sms_list = []
         for msg in messages:
@@ -887,11 +909,19 @@ def show_messages(role_manager, selected_user, selected_device):
 
         df = pd.DataFrame(sms_list)
         df = df.sort_values("timestamp", ascending=False)
+        df["type_numeric"] = pd.to_numeric(df["type"], errors="coerce").fillna(-1).astype(int)
 
         # Date-wise and detail filters
         df["date"] = df["timestamp"].dt.date
         min_date = df["date"].min()
         max_date = df["date"].max()
+
+        # Reset date filters when user/device context changes to avoid stale ranges
+        messages_scope = f"{selected_user}:{selected_device}"
+        if st.session_state.get("messages_scope") != messages_scope:
+            st.session_state.messages_scope = messages_scope
+            st.session_state.messages_start_date = max_date
+            st.session_state.messages_end_date = max_date
 
         if "messages_start_date" not in st.session_state:
             st.session_state.messages_start_date = min_date
@@ -990,15 +1020,14 @@ def show_messages(role_manager, selected_user, selected_device):
         with col1:
             st.metric("💬 Total Messages", len(filtered_df))
         with col2:
-            received_count = len(filtered_df[filtered_df["type"] == 1])
+            received_count = len(filtered_df[filtered_df["type_numeric"] == 1])
             st.metric("📥 Received", received_count)
         with col3:
-            sent_count = len(filtered_df[filtered_df["type"] == 2])
+            sent_count = len(filtered_df[filtered_df["type_numeric"] == 2])
             st.metric("📤 Sent", sent_count)
         with col4:
-            if "phoneNumber" in filtered_df.columns:
-                unique_contacts = filtered_df["phoneNumber"].nunique()
-                st.metric("👥 Unique Contacts", unique_contacts)
+            other_count = len(filtered_df) - received_count - sent_count
+            st.metric("🧩 Other Types", other_count)
 
         summary_col1, summary_col2, summary_col3 = st.columns(3)
         with summary_col1:
@@ -1018,7 +1047,7 @@ def show_messages(role_manager, selected_user, selected_device):
             conv_df = filtered_df[filtered_df["phoneNumber"] == selected_contact].sort_values("timestamp")
 
             for _, row in conv_df.iterrows():
-                direction = "user" if row["type"] == 2 else "assistant"
+                direction = "user" if row["type_numeric"] == 2 else "assistant"
                 with st.chat_message(direction):
                     contact_name = row.get("contactName")
                     if contact_name:
@@ -1027,7 +1056,7 @@ def show_messages(role_manager, selected_user, selected_device):
                     st.caption(row["timestamp"].strftime("%Y-%m-%d %H:%M:%S"))
         else:
             for _, row in filtered_df.sort_values("timestamp").iterrows():
-                direction = "user" if row["type"] == 2 else "assistant"
+                direction = "user" if row["type_numeric"] == 2 else "assistant"
                 with st.chat_message(direction):
                     st.write(row.get("body", ""))
                     st.caption(row["timestamp"].strftime("%Y-%m-%d %H:%M:%S"))
@@ -1102,6 +1131,362 @@ def show_messages(role_manager, selected_user, selected_device):
 
     except Exception as e:
         st.error(f"❌ Error loading messages: {str(e)}")
+
+def show_installed_apps(role_manager, selected_user, selected_device):
+    if not has_feature_access(role_manager, st.session_state.email, "installed_apps"):
+        st.error("🚫 Access Denied: You don't have permission to view installed apps")
+        return
+
+    if not role_manager.can_see_user_data(st.session_state.email, selected_user):
+        st.error("🚫 Access Denied: You cannot view this user's installed apps")
+        return
+
+    st.subheader(f"📦 Installed Apps - {selected_user}")
+
+    try:
+        apps_scope = f"{selected_user}:{selected_device}"
+        if st.session_state.get("apps_scope") != apps_scope:
+            st.session_state.apps_scope = apps_scope
+            st.session_state.apps_limit = 500
+
+        load_batch_apps = st.selectbox(
+            "Apps Load Batch",
+            [250, 500, 1000],
+            index=1,
+            key="apps_load_batch",
+        )
+        if st.button("Load More Apps", key="apps_load_more", use_container_width=True):
+            st.session_state.apps_limit = min(st.session_state.get("apps_limit", 500) + load_batch_apps, 10000)
+            st.rerun()
+
+        user_email = role_manager.sanitize_email(selected_user)
+        apps_ref = (
+            role_manager.db.collection("users")
+            .document(user_email)
+            .collection("devices")
+            .document(selected_device)
+            .collection("installed_apps")
+        )
+        apps_limit = st.session_state.get("apps_limit", 500)
+        apps = apps_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(apps_limit).stream()
+
+        app_data = []
+        for app in apps:
+            entry = app.to_dict() or {}
+            entry["timestamp_dt"] = epoch_to_datetime(entry.get("timestamp"))
+            entry["first_install_dt"] = epoch_to_datetime(entry.get("firstInstallTime"))
+            entry["last_update_dt"] = epoch_to_datetime(entry.get("lastUpdateTime"))
+            app_data.append(entry)
+
+        if not app_data:
+            st.info("📦 No installed apps data found.")
+            return
+
+        df = pd.DataFrame(app_data)
+        st.caption(f"Showing latest {len(df)} installed app records")
+
+        st.markdown("### 🔎 Filters")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            search_text = st.text_input("Search Package", placeholder="com.whatsapp...", key="apps_search")
+        with col2:
+            app_type = st.selectbox("App Type", ["All", "User Apps", "System Apps"], key="apps_type")
+        with col3:
+            recent_only = st.checkbox("Updated in Last 30 Days", key="apps_recent_only")
+
+        filtered_df = df.copy()
+        if search_text:
+            term = search_text.strip().lower()
+            filtered_df = filtered_df[
+                filtered_df.apply(
+                    lambda row: term in str(row.get("packageName", "")).lower() or term in str(row.get("versionName", "")).lower(),
+                    axis=1,
+                )
+            ]
+
+        if app_type in ["User Apps", "System Apps"] and "isSystemApp" in filtered_df.columns:
+            if app_type == "User Apps":
+                filtered_df = filtered_df[filtered_df["isSystemApp"].fillna(False) == False]
+            else:
+                filtered_df = filtered_df[filtered_df["isSystemApp"].fillna(False) == True]
+
+        if recent_only and "last_update_dt" in filtered_df.columns:
+            cutoff = datetime.now() - timedelta(days=30)
+            filtered_df = filtered_df[filtered_df["last_update_dt"].notna() & (filtered_df["last_update_dt"] >= cutoff)]
+
+        if filtered_df.empty:
+            st.info("No installed apps match the selected filters.")
+            return
+
+        total_apps = len(filtered_df)
+        system_apps = int(filtered_df["isSystemApp"].fillna(False).astype(bool).sum()) if "isSystemApp" in filtered_df.columns else 0
+        user_apps = total_apps - system_apps
+
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.metric("📦 Total Apps", total_apps)
+        with m2:
+            st.metric("👤 User Apps", user_apps)
+        with m3:
+            st.metric("⚙️ System Apps", system_apps)
+
+        st.markdown("### 📋 Installed Apps Records")
+        display_cols = [
+            "packageName", "versionName", "versionCode", "isSystemApp",
+            "first_install_dt", "last_update_dt", "regularlyUpdated"
+        ]
+        use_cols = [c for c in display_cols if c in filtered_df.columns]
+        detail_df = filtered_df[use_cols].copy()
+        for dt_col in ["first_install_dt", "last_update_dt"]:
+            if dt_col in detail_df.columns:
+                detail_df[dt_col] = detail_df[dt_col].apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S") if pd.notnull(x) else "")
+
+        st.dataframe(detail_df, use_container_width=True)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.download_button(
+                "⬇️ Export Installed Apps (CSV)",
+                detail_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"installed_apps_{selected_user}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with c2:
+            st.download_button(
+                "⬇️ Export Installed Apps (JSON)",
+                detail_df.to_json(orient="records", indent=2),
+                file_name=f"installed_apps_{selected_user}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+
+    except Exception as e:
+        st.error(f"❌ Error loading installed apps: {str(e)}")
+
+def show_battery_status(role_manager, selected_user, selected_device):
+    if not has_feature_access(role_manager, st.session_state.email, "battery_status"):
+        st.error("🚫 Access Denied: You don't have permission to view battery status")
+        return
+
+    if not role_manager.can_see_user_data(st.session_state.email, selected_user):
+        st.error("🚫 Access Denied: You cannot view this user's battery data")
+        return
+
+    st.subheader(f"🔋 Battery Status - {selected_user}")
+
+    try:
+        battery_scope = f"{selected_user}:{selected_device}"
+        if st.session_state.get("battery_scope") != battery_scope:
+            st.session_state.battery_scope = battery_scope
+            st.session_state.battery_limit = 1000
+
+        load_batch_battery = st.selectbox(
+            "Battery Load Batch",
+            [500, 1000, 2000],
+            index=1,
+            key="battery_load_batch",
+        )
+        if st.button("Load More Battery Records", key="battery_load_more", use_container_width=True):
+            st.session_state.battery_limit = min(st.session_state.get("battery_limit", 1000) + load_batch_battery, 20000)
+            st.rerun()
+
+        user_email = role_manager.sanitize_email(selected_user)
+        battery_ref = (
+            role_manager.db.collection("users")
+            .document(user_email)
+            .collection("devices")
+            .document(selected_device)
+            .collection("battery_status")
+        )
+        battery_limit = st.session_state.get("battery_limit", 1000)
+        records = battery_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(battery_limit).stream()
+
+        data = []
+        for rec in records:
+            entry = rec.to_dict() or {}
+            entry["timestamp"] = epoch_to_datetime(entry.get("timestamp"))
+            if not entry["timestamp"]:
+                continue
+            data.append(entry)
+
+        if not data:
+            st.info("🔋 No battery status data found.")
+            return
+
+        df = pd.DataFrame(data).sort_values("timestamp", ascending=False)
+        st.caption(f"Showing latest {len(df)} battery records")
+        df["date"] = df["timestamp"].dt.date
+        min_date, max_date = df["date"].min(), df["date"].max()
+
+        st.markdown("### ⚡ Quick Date Presets")
+        p1, p2, p3 = st.columns(3)
+        if "battery_start_date" not in st.session_state:
+            st.session_state.battery_start_date = max_date
+        if "battery_end_date" not in st.session_state:
+            st.session_state.battery_end_date = max_date
+
+        with p1:
+            if st.button("Today", key="battery_today", use_container_width=True):
+                st.session_state.battery_start_date = max_date
+                st.session_state.battery_end_date = max_date
+        with p2:
+            if st.button("Last 7 Days", key="battery_7d", use_container_width=True):
+                st.session_state.battery_start_date = max(min_date, max_date - timedelta(days=6))
+                st.session_state.battery_end_date = max_date
+        with p3:
+            if st.button("This Month", key="battery_month", use_container_width=True):
+                month_start = max_date.replace(day=1)
+                st.session_state.battery_start_date = max(min_date, month_start)
+                st.session_state.battery_end_date = max_date
+
+        f1, f2 = st.columns(2)
+        with f1:
+            start_date = st.date_input("From Date", value=st.session_state.battery_start_date, min_value=min_date, max_value=max_date, key="battery_start_date")
+        with f2:
+            end_date = st.date_input("To Date", value=st.session_state.battery_end_date, min_value=min_date, max_value=max_date, key="battery_end_date")
+        if start_date > end_date:
+            start_date, end_date = end_date, start_date
+
+        fdf = df[(df["date"] >= start_date) & (df["date"] <= end_date)].copy()
+        if fdf.empty:
+            st.info("No battery records in selected date range.")
+            return
+
+        latest = fdf.iloc[0]
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("🔋 Level", f"{latest.get('level', 'N/A')}%")
+        with c2:
+            st.metric("⚡ Charging", "Yes" if latest.get("isCharging", False) else "No")
+        with c3:
+            st.metric("🌡️ Temp", latest.get("temperature", "N/A"))
+        with c4:
+            st.metric("🔌 Voltage", latest.get("voltage", "N/A"))
+
+        chart_df = fdf.sort_values("timestamp")
+        if "level" in chart_df.columns:
+            st.plotly_chart(px.line(chart_df, x="timestamp", y="level", title="Battery Level Trend"), use_container_width=True)
+        if "temperature" in chart_df.columns:
+            st.plotly_chart(px.line(chart_df, x="timestamp", y="temperature", title="Battery Temperature Trend"), use_container_width=True)
+
+        display_cols = ["timestamp", "level", "isCharging", "chargingSource", "temperature", "voltage", "health"]
+        use_cols = [c for c in display_cols if c in fdf.columns]
+        detail_df = fdf[use_cols].copy()
+        detail_df["timestamp"] = detail_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+        st.dataframe(detail_df, use_container_width=True)
+
+        e1, e2 = st.columns(2)
+        with e1:
+            st.download_button("⬇️ Export Battery Data (CSV)", detail_df.to_csv(index=False).encode("utf-8"), file_name=f"battery_{selected_user}_{start_date}_{end_date}.csv", mime="text/csv", use_container_width=True)
+        with e2:
+            st.download_button("⬇️ Export Battery Data (JSON)", detail_df.to_json(orient="records", indent=2), file_name=f"battery_{selected_user}_{start_date}_{end_date}.json", mime="application/json", use_container_width=True)
+
+    except Exception as e:
+        st.error(f"❌ Error loading battery status: {str(e)}")
+
+def show_system_events(role_manager, selected_user, selected_device):
+    if not has_feature_access(role_manager, st.session_state.email, "system_events"):
+        st.error("🚫 Access Denied: You don't have permission to view system events")
+        return
+
+    if not role_manager.can_see_user_data(st.session_state.email, selected_user):
+        st.error("🚫 Access Denied: You cannot view this user's system events")
+        return
+
+    st.subheader(f"🧾 System Events - {selected_user}")
+
+    try:
+        events_scope = f"{selected_user}:{selected_device}"
+        if st.session_state.get("events_scope") != events_scope:
+            st.session_state.events_scope = events_scope
+            st.session_state.events_limit = 500
+
+        load_batch_events = st.selectbox(
+            "Events Load Batch",
+            [250, 500, 1000],
+            index=1,
+            key="events_load_batch",
+        )
+        if st.button("Load More Events", key="events_load_more", use_container_width=True):
+            st.session_state.events_limit = min(st.session_state.get("events_limit", 500) + load_batch_events, 10000)
+            st.rerun()
+
+        user_email = role_manager.sanitize_email(selected_user)
+        events_ref = (
+            role_manager.db.collection("users")
+            .document(user_email)
+            .collection("devices")
+            .document(selected_device)
+            .collection("system_events")
+        )
+        events_limit = st.session_state.get("events_limit", 500)
+        records = events_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(events_limit).stream()
+
+        event_data = []
+        for rec in records:
+            entry = rec.to_dict() or {}
+            entry["timestamp"] = epoch_to_datetime(entry.get("timestamp"))
+            if not entry["timestamp"]:
+                continue
+            event_data.append(entry)
+
+        if not event_data:
+            st.info("🧾 No system events found for this device.")
+            return
+
+        df = pd.DataFrame(event_data).sort_values("timestamp", ascending=False)
+        st.caption(f"Showing latest {len(df)} system event records")
+        df["date"] = df["timestamp"].dt.date
+        min_date, max_date = df["date"].min(), df["date"].max()
+
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            start_date = st.date_input("From Date", value=min_date, min_value=min_date, max_value=max_date, key="events_start")
+        with f2:
+            end_date = st.date_input("To Date", value=max_date, min_value=min_date, max_value=max_date, key="events_end")
+        with f3:
+            search_event = st.text_input("Search Event", placeholder="boot, shutdown...", key="events_search")
+
+        if start_date > end_date:
+            start_date, end_date = end_date, start_date
+
+        fdf = df[(df["date"] >= start_date) & (df["date"] <= end_date)].copy()
+        if search_event:
+            term = search_event.strip().lower()
+            fdf = fdf[fdf["event"].fillna("").astype(str).str.lower().str.contains(term)]
+
+        if fdf.empty:
+            st.info("No system events match the selected filters.")
+            return
+
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.metric("🧾 Total Events", len(fdf))
+        with m2:
+            st.metric("📅 Date Range", f"{start_date} to {end_date}")
+        with m3:
+            st.metric("🏷️ Unique Event Labels", fdf["event"].nunique() if "event" in fdf.columns else 0)
+
+        daily = fdf.copy()
+        daily["date"] = daily["timestamp"].dt.date
+        daily_counts = daily.groupby("date").size().reset_index(name="count")
+        st.plotly_chart(px.bar(daily_counts, x="date", y="count", title="Daily System Event Count"), use_container_width=True)
+
+        display_cols = ["timestamp", "event", "deviceId"]
+        use_cols = [c for c in display_cols if c in fdf.columns]
+        detail_df = fdf[use_cols].copy()
+        detail_df["timestamp"] = detail_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+        st.dataframe(detail_df, use_container_width=True)
+
+        e1, e2 = st.columns(2)
+        with e1:
+            st.download_button("⬇️ Export Events (CSV)", detail_df.to_csv(index=False).encode("utf-8"), file_name=f"system_events_{selected_user}_{start_date}_{end_date}.csv", mime="text/csv", use_container_width=True)
+        with e2:
+            st.download_button("⬇️ Export Events (JSON)", detail_df.to_json(orient="records", indent=2), file_name=f"system_events_{selected_user}_{start_date}_{end_date}.json", mime="application/json", use_container_width=True)
+
+    except Exception as e:
+        st.error(f"❌ Error loading system events: {str(e)}")
 
 def show_phone_state(role_manager, selected_user, selected_device):
     if not role_manager.can_access_feature(st.session_state.email, "phone_state"):
@@ -1486,6 +1871,9 @@ def main():
         "📞 Call Logs": ("call_logs", show_call_logs),
         "👥 Contacts": ("contacts", show_contacts),
         "💬 Messages": ("messages", show_messages),
+        "📦 Installed Apps": ("phone_state", show_installed_apps),
+        "🔋 Battery Status": ("phone_state", show_battery_status),
+        "🧾 System Events": ("phone_state", show_system_events),
         "📶 Phone State": ("phone_state", show_phone_state)
     }
     
